@@ -27,7 +27,7 @@ function prepare_test(){
         gpstop -arf
 
         pushd plr_src/src
-		make installcheck
+		make USE_PGXS=1 installcheck
         
         [ -s regression.diffs ] && cat regression.diffs && exit 1
         popd
