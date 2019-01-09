@@ -1,5 +1,5 @@
 \set ECHO all
-\i /usr/local/greenplum-db-devel/share/postgresql/extension/plr.sql
+\i /usr/local/greenplum-db-devel/share/postgresql/contrib/plr.sql
 
 -- make typenames available in the global namespace
 select load_r_typenames();

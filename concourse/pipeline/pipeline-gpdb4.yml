@@ -45,13 +45,10 @@ resources:
 - name: plr_src
   type: git
   source:
-    branch: master
+    branch: gpdb4 
     uri: https://github.com/greenplum-db/plr.git
 
-# centos 7
-
-
-# centtos 6
+# centos gpdb
 
 - name: bin_gpdb4_centos5
   type: s3

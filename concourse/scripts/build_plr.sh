@@ -5,11 +5,8 @@ set -exo pipefail
 CWDIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 TOP_DIR=${CWDIR}/../../../
 
-if [ "$GPDBVER" == "GPDB4.3" ]; then
-    source "${TOP_DIR}/gpdb_src/ci/concourse/scripts/common.bash"
-else
-    source "${TOP_DIR}/gpdb_src/concourse/scripts/common.bash"
-fi
+source "${TOP_DIR}/gpdb_src/ci/concourse/scripts/common.bash"
+
 function pkg() {
     source /opt/gcc_env.sh
     source /usr/local/greenplum-db-devel/greenplum_path.sh
@@ -22,15 +19,12 @@ function pkg() {
     export R_HOME=/usr/lib64/R/lib64/R
     export USE_PGXS=1
     pushd plr_src/src
-    make clean
-    make
+        make clean
+        make
     popd
     pushd plr_src/gppkg
-    if [ "$GPDBVER" == "GPDB4.3" ]; then
-       sed -i 's/extension/contrib/g' gppkg_spec.yml.in
-    fi
-    make cleanall
-    make
+        make cleanall
+        make
     popd
     
     cp plr_src/gppkg/plr-*.gppkg bin_plr/plr-$OSVER.gppkg
