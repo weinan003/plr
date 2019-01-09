@@ -55,30 +55,6 @@ select install_rcmd('pg.test.install <-function(msg) {print(msg)}');
 create or replace function pg_test_install(text) returns text as 'pg.test.install(arg1)' language 'plr';
 select pg_test_install('hello world');
 
-CREATE TABLE plr_modules (
-	modseq int4,
-	modsrc text
-) DISTRIBUTED REPLICATED;
-
-CREATE TABLE module_test (i int) DISTRIBUTED BY (i);
-
-INSERT INTO module_test select * from generate_series(1, 10);
-
-CREATE OR REPLACE FUNCTION pg_test_module_load(text) RETURNS TEXT AS
-'pg.test.module.load(arg1)' LANGUAGE plr;
-
-INSERT INTO plr_modules
-VALUES (0, 'pg.test.module.load <-function(msg) {print(msg)}');
-
-select reload_plr_modules();
-
--- force to reload on segment
-select count(reload_plr_modules()) from module_test;
-
-select pg_test_module_load('hello world');
-
-select count(pg_test_module_load('hello world')) from module_test;
-
 --
 -- a variety of plr functions
 --
