@@ -43,7 +43,7 @@ resources:
 - name: plr_src
   type: git
   source:
-    branch: gpdb6
+    branch: master
     uri: https://github.com/greenplum-db/plr.git
 
 # centos 7
@@ -53,42 +53,42 @@ resources:
   source:
     bucket: ((gcs-bucket-intermediates))
     json_key: ((concourse-gcs-resources-service-account-key))
-    versioned_file: 6X_STABLE/bin_gpdb_centos7/bin_gpdb.tar.gz
+    versioned_file: gpdb_master/bin_gpdb_centos7/bin_gpdb.tar.gz
 
 - name: plr_gpdb_centos7_build
   type: gcs
   source:
     json_key: {{gcs-read-write-service-account-key}}
     bucket: {{gcs-bucket-intermediates}}
-    versioned_file: plr/plr-centos7/gpdb6/plr-devel.gppkg
+    versioned_file: plr/plr-centos7/gpdb_master/plr-devel.gppkg
 
 - name: plr_gpdb_centos6_build
   type: gcs
   source:
     json_key: {{gcs-read-write-service-account-key}}
     bucket: {{gcs-bucket-intermediates}}
-    versioned_file: plr/plr-centos6/gpdb6/plr-devel.gppkg
+    versioned_file: plr/plr-centos6/gpdb_master/plr-devel.gppkg
 
 - name: bin_gpdb_centos6
   type: gcs
   source:
     bucket: ((gcs-bucket-intermediates))
     json_key: ((concourse-gcs-resources-service-account-key))
-    versioned_file: 6X_STABLE/bin_gpdb_centos6/bin_gpdb.tar.gz
+    versioned_file: gpdb_master/bin_gpdb_centos6/bin_gpdb.tar.gz
 
 - name: plr_gpdb_centos7_bin
   type: gcs
   source:
     json_key: {{gcs-read-write-service-account-key}}
     bucket: {{gcs-bucket-intermediates}}
-    regexp: plr/published/gpdb6/plr-rhel7.gppkg
+    regexp: plr/published/gpdb_master/plr-rhel7.gppkg
 
 - name: plr_gpdb_centos6_bin
   type: gcs
   source:
     json_key: {{gcs-read-write-service-account-key}}
     bucket: {{gcs-bucket-intermediates}}
-    regexp: plr/published/gpdb6/plr-rhel6.gppkg
+    regexp: plr/published/gpdb_master/plr-rhel6.gppkg
 
 ## jobs
 ## ======================================================================
