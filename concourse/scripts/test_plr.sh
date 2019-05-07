@@ -46,6 +46,9 @@ function test() {
     centos7)
         cp bin_plr/plr-*.gppkg plr_gppkg/plr-rhel7.gppkg
       ;;
+    ubuntu18)
+        cp bin_plr/plr-*.gppkg plr_gppkg/plr-ubuntu18.gppkg
+      ;;
     *) echo "Unknown OS: $OSVER"; exit 1 ;;
   esac
 }
@@ -58,6 +61,9 @@ function setup_gpadmin_user() {
         centos*)
         ${GPDB_CONCOURSE_DIR}/setup_gpadmin_user.bash "centos"
         ;;
+        ubuntu*)
+        ${GPDB_CONCOURSE_DIR}/setup_gpadmin_user.bash "ubuntu"
+        ;;
         *) echo "Unknown OS: $OSVER"; exit 1 ;;
     esac
 	
@@ -65,7 +71,19 @@ function setup_gpadmin_user() {
 
 function install_R()
 {
-	yum install -y R
+case $OSVER in
+centos*)
+    yum install -y R pkg-config
+    ;;
+ubuntu*)
+    apt update
+    apt install -y r-base pkg-config
+    ;;
+*)
+    echo "unknown OSVER = $OSVER"
+    exit 1
+    ;;
+esac
 }
 
 function _main() {

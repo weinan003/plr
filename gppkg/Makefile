@@ -1,50 +1,39 @@
-ifneq (,${R_HOME})
-
 SHELL=/bin/bash
+R_HOME=$(shell R RHOME)
+export R_HOME
+R_VER=$(shell R --version | sed -nr 's/.*version\s+([0-9.]+)\s+.*/\1/p')
+export R_VER
+
+# default target
 all: gppkg
 
 PGXS := $(shell pg_config --pgxs)
 include $(PGXS)
 
-OS=$(word 1,$(subst _, ,$(BLD_ARCH)))
+OS=$(word 1,$(subst _, ,$(BLDARCH)))
 ARCH=$(shell uname -p)
 
 PLR_DIR=$(shell cd .. && pwd)
+export PLR_DIR
 include $(PLR_DIR)/gppkg/release.mk
-
-PLR_GPPKG_VER=ossv$(PLR_OSS_VER)_pv$(PLR_VER).$(PLR_REL)-GPDB-$(GP_VERSION)-orca
-GPPKG_VERSION=$(PLR_GPPKG_VER)
-PLR_RPM_FLAGS="--define 'plr_dir $(PLR_DIR)/src' --define 'plr_ver $(PLR_VER)' --define 'plr_rel $(PLR_REL)' --define 'r_ver $(R_VER)' --define 'r_dir $(R_HOME)'"
-PLR_RPM=plr-$(PLR_VER)-$(PLR_REL).$(ARCH).rpm
-PLR_GPPKG=plr-$(PLR_GPPKG_VER)-$(OS)-$(ARCH).gppkg
-
-TARGET_GPPKG=$(PLR_GPPKG)
-EXTRA_CLEAN+=$(R_RPM) $(PLR_RPM) $(PLR_GPPKG)
 
 #
 # Generic rules to build gppkgs included here
 #
-include gppkg.mk
-
-.PHONY: gppkg
-gppkg: 
-	PATH=$(INSTLOC)/bin:$(PATH) $(MAKE) $(PLR_RPM) RPM_FLAGS=$(PLR_RPM_FLAGS)
-	$(MAKE) $(PLR_GPPKG) MAIN_RPM=$(PLR_RPM)
-
-.PHONY: cleanall
-cleanall: clean
-	rm -rf BUILDROOT
-	rm -rf SOURCES
-	rm -rf SRPMS
-	rm -rf $(PLR_RPM)
-	rm -rf $(PLR_GPPKG)
-
-else
-
-all:
-	@echo ""; \
-	 echo "*** Cannot build PL/R because R_HOME cannot be found." ; \
-	 echo "*** Refer to the documentation for details."; \
-	 echo ""
-
+OSNAME=$(shell echo $(OS) | sed -n "s/[0-9]\+//p")
+ifeq ($(OSNAME), rhel)
+include gppkg_rpm.mk
 endif
+ifeq ($(OSNAME), ubuntu)
+include gppkg_deb.mk
+endif
+
+.PHONY: gppkg gppkg_spec.yml distro
+gppkg: clean gppkg_spec.yml distro
+
+gppkg_spec.yml: gppkg_spec.yml.in
+	cat $< | sed "s/#arch/$(ARCH)/g" | sed "s/#os/$(OS)/g" | sed 's/#gpver/$(GP_VERSION_NUM)/g' | sed "s/#gppkgver/$(PLR_VER).$(PLR_REL)/g" > $@
+
+.PHONY: cleanall clean
+cleanall: clean
+
