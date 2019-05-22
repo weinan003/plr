@@ -165,8 +165,6 @@ jobs:
   - aggregate:
     - get: plr_src
       trigger: true
-    - get: bin_gpdb_centos7
-      trigger: true
     - get: centos-gpdb-dev-7
     - get: xz
     - get: zlib
@@ -184,8 +182,6 @@ jobs:
   plan:
   - aggregate:
     - get: plr_src
-      trigger: true
-    - get: bin_gpdb_centos6
       trigger: true
     - get: centos-gpdb-dev-6
     - get: xz
