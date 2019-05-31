@@ -49,8 +49,14 @@ resources:
 - name: ubuntu18-image
   type: docker-image
   source:
-    repository: pivotaldata/ubuntu-gpdb-dev
-    tag: '16.04'
+    repository: pivotaldata/gpdb6-ubuntu18.04-build
+    tag: latest
+
+- name: ubuntu18-image-test
+  type: docker-image
+  source:
+    repository: pivotaldata/gpdb6-ubuntu18.04-test
+    tag: latest
 
 # Github Source Codes
 
@@ -83,13 +89,11 @@ resources:
     versioned_file: 6X_STABLE/bin_gpdb_centos6/bin_gpdb.tar.gz
 
 - name: bin_gpdb_ubuntu18
-  type: s3
+  type: gcs
   source:
-    access_key_id: {{bucket-access-key-id}}
-    bucket: procedural-languages-concourse-gpdb-5x-stable
-    region_name: {{aws-region}}
-    secret_access_key: {{bucket-secret-access-key}}
-    versioned_file: build/gpdb_6x/bin_gpdb_ubuntu16/bin_gpdb.tar.gz
+    bucket: {{gcs-bucket-intermediates}}
+    json_key: {{concourse-gcs-resources-service-account-key}}
+    versioned_file: ((gcs_gpdb_binary_folder))/bin_gpdb_ubuntu18.04/bin_gpdb.tar.gz
 
 - name: bin_r_centos7
   type: gcs
@@ -138,7 +142,8 @@ resources:
 - name: zlib
   type: s3
   source:
-    bucket: {{pl-bucket-name}}
+    #bucket: {{pl-bucket-name}}
+    bucket: procedural-languages-concourse-gpdb-5x-stable
     region_name: {{aws-region}}
     access_key_id: {{bucket-access-key-id}}
     secret_access_key: {{bucket-secret-access-key}}
@@ -261,6 +266,7 @@ jobs:
   max_in_flight: 3
   plan:
   - aggregate:
+    - get: ubuntu18-image-test
     - get: ubuntu18-image
     - get: plr_src
       trigger: true
@@ -277,7 +283,7 @@ jobs:
   - aggregate:
     - task: Test_PLR
       file: plr_src/concourse/tasks/test_plr.yml
-      image: ubuntu18-image
+      image: ubuntu18-image-test
       params:
         <<: *ubuntu18_params
   - aggregate:

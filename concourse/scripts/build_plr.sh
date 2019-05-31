@@ -20,7 +20,7 @@ centos*)
     ;;
 ubuntu*)
     apt update
-    apt install -y r-base pkg-config
+    DEBIAN_FRONTEND=noninteractive apt install -y r-base pkg-config
     ;;
 *)
     echo "unknown OSVER = $OSVER"
