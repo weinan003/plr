@@ -1874,7 +1874,8 @@ get_frame_tuplestore(SEXP rval,
 					 bool retset)
 {
 	Tuplestorestate	   *tupstore;
-	char			  **values;
+	Datum              *values;
+	bool               *isnulls;
 	HeapTuple			tuple;
 	TupleDesc			tupdesc = attinmeta->tupdesc;
 	int					tupdesc_nc = tupdesc->natts;
@@ -1919,151 +1920,32 @@ get_frame_tuplestore(SEXP rval,
 	else
 		nr = 1;
 
-	/* coerce columns to character in advance */
-	PROTECT(result = NEW_LIST(nc));
-	for (j = 0; j < nc; j++)
+
+	values = (Datum *) palloc0(nc * sizeof(Datum));
+	isnulls = (bool *) palloc0(nc * sizeof(bool));
+	SEXP* dfcol_arr = (SEXP *) palloc(nc * sizeof(SEXP));
+
+	for (j = 0; j < nc; j ++)
 	{
-		PROTECT(dfcol = VECTOR_ELT(rval, j));
-		if((!isFactor(dfcol)) &&
-		   ((attrs[j]->attndims == 0) ||
-			(TYPEOF(dfcol) != VECSXP)))
-		{
-			SEXP	obj;
-
-			PROTECT(obj = coerce_to_char(dfcol));
-			SET_VECTOR_ELT(result, j, obj);
-			UNPROTECT(1);
-		}
-		else if(attrs[j]->attndims != 0)	/* array data type */
-		{
-			SEXP	obj;
-
-			PROTECT(obj = NEW_LIST(nr));
-			for(i = 0; i < nr; i++)
-			{
-				SEXP	dfcolcell;
-				SEXP	objcell;
-
-				PROTECT(dfcolcell = VECTOR_ELT(dfcol, i));
-				PROTECT(objcell = coerce_to_char(dfcolcell));
-				SET_VECTOR_ELT(obj, i, objcell);
-				UNPROTECT(2);
-			}
-
-			SET_VECTOR_ELT(result, j, obj);
-			UNPROTECT(1);
-		}
-		else
-		{
-			SEXP 	t;
-
-			for (t = ATTRIB(dfcol); t != R_NilValue; t = CDR(t))
-			{
-				if(TAG(t) == R_LevelsSymbol)
-				{
-					PROTECT(SETCAR(t, coerce_to_char(CAR(t))));
-					UNPROTECT(1);
-					break;
-				}
-			}
-			SET_VECTOR_ELT(result, j, dfcol);
-		}
-
-		UNPROTECT(1);
+		dfcol_arr[j] = VECTOR_ELT(rval, j);
 	}
-
-	values = (char **) palloc(nc * sizeof(char *));
 
 	for(i = 0; i < nr; i++)
 	{
 		for (j = 0; j < nc; j++)
 		{
-			PROTECT(dfcol = VECTOR_ELT(result, j));
-
-			if(isFactor(dfcol))
-			{
-				SEXP t;
-
-				/*
-				 * a factor is a special type of integer
-				 * but must check for NA value first
-				 */
-				if (INTEGER_ELT(dfcol, i) != NA_INTEGER)
-				{
-					for (t = ATTRIB(dfcol); t != R_NilValue; t = CDR(t))
-					{
-						if(TAG(t) == R_LevelsSymbol)
-						{
-							SEXP	obj;
-							int		idx = INTEGER(dfcol)[i] - 1;
-
-							PROTECT(obj = CAR(t));
-							values[j] = pstrdup(CHAR(STRING_ELT(obj, idx)));
-							UNPROTECT(1);
-
-							break;
-						}
-					}
-				}
-				else
-					values[j] = NULL;
-			}
+			if(TYPEOF(dfcol_arr[j]) == INTSXP)
+				values[j] = Int64GetDatum(INTEGER(dfcol_arr[j])[i]);
 			else
-			{
-				if ((attrs[j]->attndims != 0) || (STRING_ELT(dfcol, i) != NA_STRING))
-				{
-					if (attrs[j]->attndims == 0)
-					{
-						values[j] = pstrdup(CHAR(STRING_ELT(dfcol, i)));
-					}
-					else	/* array data type */
-					{
-						bool	isnull = false;
-						Datum	arr_datum;
-
-						if (TYPEOF(dfcol) != VECSXP)
-							arr_datum = get_array_datum(dfcol, function, j, &isnull);
-						else
-							arr_datum = get_array_datum(VECTOR_ELT(dfcol,i), function, j, &isnull);
-
-						if (isnull)
-						{
-							values[j] = NULL;
-						}
-						else
-						{
-							FunctionCallInfoData	fake_fcinfo;
-							FmgrInfo				flinfo;
-							Datum					dvalue;
-							
-							MemSet(&fake_fcinfo, 0, sizeof(fake_fcinfo));
-							MemSet(&flinfo, 0, sizeof(flinfo));
-							fake_fcinfo.flinfo = &flinfo;
-							flinfo.fn_mcxt = CurrentMemoryContext;
-							fake_fcinfo.context = NULL;
-							fake_fcinfo.resultinfo = NULL;
-							fake_fcinfo.isnull = false;
-							fake_fcinfo.nargs = 1;
-							fake_fcinfo.arg[0] = arr_datum;
-							fake_fcinfo.argnull[0] = false;
-							dvalue = (*array_out)(&fake_fcinfo);
-							if (fake_fcinfo.isnull)
-								values[j] = NULL;
-							else
-								values[j] = DatumGetCString(dvalue);
-						}
-					}
-				}
-				else
-					values[j] = NULL;
-			}
-
-			UNPROTECT(1);
+				values[j] = Int64GetDatum(REAL(dfcol_arr[j])[i]);
 		}
 
 		/* construct the tuple */
-		tuple = BuildTupleFromCStrings(attinmeta, values);
-
+		tuple = heaptuple_form_to(tupdesc ,
+		                          values,
+		                          isnulls,
+		                          NULL,
+		                          NULL);
 		/* switch to appropriate context while storing the tuple */
 		oldcontext = MemoryContextSwitchTo(per_query_ctx);
 
@@ -2073,12 +1955,10 @@ get_frame_tuplestore(SEXP rval,
 		/* now reset the context */
 		MemoryContextSwitchTo(oldcontext);
 
-		for (j = 0; j < nc; j++)
-			if (values[j] != NULL)
-				pfree(values[j]);
 	}
-	UNPROTECT(1);
 
+	pfree(values);
+	pfree(isnulls);
 	oldcontext = MemoryContextSwitchTo(per_query_ctx);
 	tuplestore_donestoring(tupstore);
 	MemoryContextSwitchTo(oldcontext);
