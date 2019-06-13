@@ -1934,10 +1934,36 @@ get_frame_tuplestore(SEXP rval,
 	{
 		for (j = 0; j < nc; j++)
 		{
-			if(TYPEOF(dfcol_arr[j]) == INTSXP)
+			if(TYPEOF(dfcol_arr[j]) == INTSXP )
+			{
 				values[j] = Int64GetDatum(INTEGER(dfcol_arr[j])[i]);
+			}
+			else if(TYPEOF(dfcol_arr[j]) == STRSXP)
+			{
+				//hack for cast date
+				FmgrInfo flinfo;
+				FunctionCallInfoData fcinfo;
+
+				fmgr_info(1084, &flinfo);
+				const char * date_str = CHAR(STRING_ELT(dfcol_arr[j],i));
+
+				InitFunctionCallInfoData(fcinfo, &flinfo, 3, NULL, NULL);
+
+				fcinfo.arg[0] = CStringGetDatum(date_str);
+				fcinfo.arg[1] = ObjectIdGetDatum(1082);
+				fcinfo.arg[2] = Int32GetDatum(-1);
+				fcinfo.argnull[0] = (date_str == NULL);
+				fcinfo.argnull[1] = false;
+				fcinfo.argnull[2] = false;
+
+				values[j] = FunctionCallInvoke(&fcinfo);
+			}
 			else
-				values[j] = Int64GetDatum(REAL(dfcol_arr[j])[i]);
+			{
+				values[j] = tupdesc->attrs[j]->atttypid == INT8OID ?
+				Int64GetDatum(REAL(dfcol_arr[j])[i]):
+				Float8GetDatum(REAL(dfcol_arr[j])[i]);
+			}
 		}
 
 		/* construct the tuple */
