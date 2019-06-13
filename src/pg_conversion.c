@@ -34,6 +34,10 @@
  */
 #include "plr.h"
 
+Datum *tuplebuffer[10000] = {};
+bool firsttime_1 = true;
+int numRow = 0;
+
 static void pg_get_one_r(char *value, Oid arg_out_fn_oid, SEXP *obj,
 																int elnum);
 static SEXP get_r_vector(Oid typtype, int numels);
@@ -681,6 +685,16 @@ r_get_pg(SEXP rval, plr_function *function, FunctionCallInfo fcinfo)
 	bool	isnull = false;
 	Datum	result;
 
+	if(!firsttime_1)
+	{
+		result = get_tuplestore(rval, function, fcinfo, &isnull);
+
+		if (isnull)
+			fcinfo->isnull = true;
+
+		return result;
+	}
+
 	if (function->result_typid != BYTEAOID &&
 		(TYPEOF(rval) == CLOSXP ||
 		 TYPEOF(rval) == PROMSXP ||
@@ -933,6 +947,27 @@ get_tuplestore(SEXP rval, plr_function *function, FunctionCallInfo fcinfo, bool 
 	MemoryContext	per_query_ctx;
 	MemoryContext	oldcontext;
 	int				nc;
+
+	if(!firsttime_1)
+	{
+		per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+
+		oldcontext = MemoryContextSwitchTo(per_query_ctx);
+		/* get the requested return tuple description */
+		tupdesc = CreateTupleDescCopy(rsinfo->expectedDesc);
+
+		attinmeta = TupleDescGetAttInMetadata(tupdesc);
+
+		rsinfo->setResult = get_frame_tuplestore(rval, function, attinmeta, per_query_ctx, retset);
+
+		rsinfo->setDesc = tupdesc;
+		MemoryContextSwitchTo(oldcontext);
+
+		rsinfo->returnMode = SFRM_Materialize;
+
+		*isnull = true;
+		return (Datum) 0;
+	}
 
 	/* check to see if caller supports us returning a tuplestore */
 	if (!rsinfo || !(rsinfo->allowedModes & SFRM_Materialize))
@@ -1866,6 +1901,7 @@ get_generic_array_datum(SEXP rval, plr_function *function, int col, bool *isnull
 	return dvalue;
 }
 
+
 static Tuplestorestate *
 get_frame_tuplestore(SEXP rval,
 					 plr_function *function,
@@ -1883,17 +1919,10 @@ get_frame_tuplestore(SEXP rval,
 	MemoryContext		oldcontext;
 	int					i, j;
 	int					nr = 0;
-	int					nc = length(rval);
+	int					nc = 0;
 	SEXP				dfcol;
 	SEXP				result;
 
-	if (nc != tupdesc_nc)
-		ereport(ERROR,
-		(errcode(ERRCODE_DATA_EXCEPTION),
-			errmsg("actual and requested return type mismatch"),
-			errdetail("Actual return type has %d columns, but " \
-					  "requested return type has %d", nc, tupdesc_nc)));
-		
 	/* switch to appropriate context to create the tuple store */
 	oldcontext = MemoryContextSwitchTo(per_query_ctx);
 
@@ -1902,92 +1931,130 @@ get_frame_tuplestore(SEXP rval,
 
 	MemoryContextSwitchTo(oldcontext);
 
-	/*
-	 * If we return a set, get number of rows by examining the first column.
-	 * Otherwise, stop at one row.
-	 */
-	if (retset)
+	if(firsttime_1)
 	{
-		if (isFrame(rval))
+
+		nc = length(rval);
+		if (nc != tupdesc_nc)
+			ereport(ERROR,
+			        (errcode(ERRCODE_DATA_EXCEPTION),
+					        errmsg("actual and requested return type mismatch"),
+					        errdetail("Actual return type has %d columns, but " \
+					  "requested return type has %d", nc, tupdesc_nc)));
+
+		/*
+		 * If we return a set, get number of rows by examining the first column.
+		 * Otherwise, stop at one row.
+		 */
+		if (retset)
 		{
-			PROTECT(dfcol = VECTOR_ELT(rval, 0));
-			nr = length(dfcol);
-			UNPROTECT(1);
+			if (isFrame(rval))
+			{
+				PROTECT(dfcol = VECTOR_ELT(rval, 0));
+				nr = length(dfcol);
+				UNPROTECT(1);
+			}
+			else if (isList(rval) || isNewList(rval))
+				nr = 1;
 		}
-		else if (isList(rval) || isNewList(rval))
+		else
 			nr = 1;
-	}
-	else
-		nr = 1;
 
 
-	values = (Datum *) palloc0(nc * sizeof(Datum));
-	isnulls = (bool *) palloc0(nc * sizeof(bool));
-	SEXP* dfcol_arr = (SEXP *) palloc(nc * sizeof(SEXP));
+		values = (Datum *) malloc(nc * sizeof(Datum));
+		bzero(values,nc * sizeof(Datum));
+		isnulls = (bool *) palloc0(nc * sizeof(bool));
+		SEXP* dfcol_arr = (SEXP *) palloc(nc * sizeof(SEXP));
 
-	for (j = 0; j < nc; j ++)
-	{
-		dfcol_arr[j] = VECTOR_ELT(rval, j);
-	}
-
-	for(i = 0; i < nr; i++)
-	{
-		for (j = 0; j < nc; j++)
+		for (j = 0; j < nc; j ++)
 		{
-			if(TYPEOF(dfcol_arr[j]) == INTSXP )
-			{
-				values[j] = Int64GetDatum(INTEGER(dfcol_arr[j])[i]);
-			}
-			else if(TYPEOF(dfcol_arr[j]) == STRSXP)
-			{
-				//hack for cast date
-				FmgrInfo flinfo;
-				FunctionCallInfoData fcinfo;
-
-				fmgr_info(1084, &flinfo);
-				const char * date_str = CHAR(STRING_ELT(dfcol_arr[j],i));
-
-				InitFunctionCallInfoData(fcinfo, &flinfo, 3, NULL, NULL);
-
-				fcinfo.arg[0] = CStringGetDatum(date_str);
-				fcinfo.arg[1] = ObjectIdGetDatum(1082);
-				fcinfo.arg[2] = Int32GetDatum(-1);
-				fcinfo.argnull[0] = (date_str == NULL);
-				fcinfo.argnull[1] = false;
-				fcinfo.argnull[2] = false;
-
-				values[j] = FunctionCallInvoke(&fcinfo);
-			}
-			else
-			{
-				values[j] = tupdesc->attrs[j]->atttypid == INT8OID ?
-				Int64GetDatum(REAL(dfcol_arr[j])[i]):
-				Float8GetDatum(REAL(dfcol_arr[j])[i]);
-			}
+			dfcol_arr[j] = VECTOR_ELT(rval, j);
 		}
 
-		/* construct the tuple */
-		tuple = heaptuple_form_to(tupdesc ,
-		                          values,
-		                          isnulls,
-		                          NULL,
-		                          NULL);
-		/* switch to appropriate context while storing the tuple */
+		numRow = nr;
+
+		for(i = 0; i < nr; i++)
+		{
+			for (j = 0; j < nc; j++)
+			{
+				if(TYPEOF(dfcol_arr[j]) == INTSXP )
+				{
+					values[j] = Int64GetDatum(INTEGER(dfcol_arr[j])[i]);
+				}
+				else if(TYPEOF(dfcol_arr[j]) == STRSXP)
+				{
+					//hack for cast date
+					FmgrInfo flinfo;
+					FunctionCallInfoData fcinfo;
+
+					fmgr_info(1084, &flinfo);
+					const char * date_str = CHAR(STRING_ELT(dfcol_arr[j],i));
+
+					InitFunctionCallInfoData(fcinfo, &flinfo, 3, NULL, NULL);
+
+					fcinfo.arg[0] = CStringGetDatum(date_str);
+					fcinfo.arg[1] = ObjectIdGetDatum(1082);
+					fcinfo.arg[2] = Int32GetDatum(-1);
+					fcinfo.argnull[0] = (date_str == NULL);
+					fcinfo.argnull[1] = false;
+					fcinfo.argnull[2] = false;
+
+					values[j] = FunctionCallInvoke(&fcinfo);
+				}
+				else
+				{
+					values[j] = tupdesc->attrs[j]->atttypid == INT8OID ?
+							Int64GetDatum(REAL(dfcol_arr[j])[i]):
+							Float8GetDatum(REAL(dfcol_arr[j])[i]);
+				}
+			}
+
+			tuplebuffer[i] = values;
+
+			/* construct the tuple */
+			tuple = heaptuple_form_to(tupdesc ,
+			                          values,
+			                          isnulls,
+			                          NULL,
+			                          NULL);
+
+
+			/* switch to appropriate context while storing the tuple */
+			oldcontext = MemoryContextSwitchTo(per_query_ctx);
+
+			/* now store it */
+			tuplestore_puttuple(tupstore, tuple);
+
+			/* now reset the context */
+			MemoryContextSwitchTo(oldcontext);
+
+		}
+
+		pfree(isnulls);
 		oldcontext = MemoryContextSwitchTo(per_query_ctx);
-
-		/* now store it */
-		tuplestore_puttuple(tupstore, tuple);
-
-		/* now reset the context */
+		tuplestore_donestoring(tupstore);
 		MemoryContextSwitchTo(oldcontext);
+		firsttime_1 = false;
+	} else {
+		isnulls = (bool *) palloc0(tupdesc->natts * sizeof(bool));
+		for(int i = 0; i < numRow; i ++)
+		{
+			Datum * tuplevalues = tuplebuffer[i];
 
+			/* construct the tuple */
+			tuple = heaptuple_form_to(tupdesc ,
+			                          tuplevalues,
+			                          isnulls,
+			                          NULL,
+			                          NULL);
+
+			oldcontext = MemoryContextSwitchTo(per_query_ctx);
+			tuplestore_puttuple(tupstore, tuple);
+			MemoryContextSwitchTo(oldcontext);
+		}
+		pfree(isnulls);
+		/* now reset the context */
 	}
-
-	pfree(values);
-	pfree(isnulls);
-	oldcontext = MemoryContextSwitchTo(per_query_ctx);
-	tuplestore_donestoring(tupstore);
-	MemoryContextSwitchTo(oldcontext);
 
 	return tupstore;
 }

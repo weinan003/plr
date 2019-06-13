@@ -225,6 +225,7 @@ plr_call_handler(PG_FUNCTION_ARGS)
 	else
 		retval = plr_func_handler(fcinfo);
 
+
 	return retval;
 }
 
@@ -747,6 +748,7 @@ plr_trigger_handler(PG_FUNCTION_ARGS)
 	return retval;
 }
 
+bool firsttime = true;
 static Datum
 plr_func_handler(PG_FUNCTION_ARGS)
 {
@@ -755,6 +757,7 @@ plr_func_handler(PG_FUNCTION_ARGS)
 	SEXP			rargs;
 	SEXP			rvalue;
 	Datum			retval;
+
 	ERRORCONTEXTCALLBACK;
 
 	/* Find or compile the function */
@@ -768,16 +771,33 @@ plr_func_handler(PG_FUNCTION_ARGS)
 	/* Convert all call arguments */
 	PROTECT(rargs = plr_convertargs(function, fcinfo->arg, fcinfo->argnull, fcinfo));
 
-	/* Call the R function */
-	PROTECT(rvalue = call_r_func(fun, rargs));
+	if(firsttime)
+	{
+		/* Call the R function */
+		PROTECT(rvalue = call_r_func(fun, rargs));
 
-	/*
-	 * Convert the return value from an R object to a Datum.
-	 * We expect r_get_pg to do the right thing with missing or empty results.
-	 */
+		firsttime = false;
+
+		retval = r_get_pg(rvalue, function, fcinfo);
+
+		if (SPI_finish() != SPI_OK_FINISH)
+			elog(ERROR, "SPI_finish failed");
+
+		POP_PLERRCONTEXT;
+
+		return retval;
+	}
+	else
+	{
+		int i;
+		PROTECT(i = 1);
+
+		retval = r_get_pg(rvalue, function, fcinfo);
+
+	}
+
 	if (SPI_finish() != SPI_OK_FINISH)
 		elog(ERROR, "SPI_finish failed");
-	retval = r_get_pg(rvalue, function, fcinfo);
 
 	POP_PLERRCONTEXT;
 	UNPROTECT(3);
