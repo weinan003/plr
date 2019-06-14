@@ -513,7 +513,7 @@ extern SEXP pg_array_get_r(Datum dvalue, FmgrInfo out_func, int typlen, bool typ
 extern SEXP pg_datum_array_get_r(Datum *elem_values, bool *elem_nulls, int numels, bool has_nulls,
 								 Oid element_type, FmgrInfo out_func, bool typbyval);
 extern SEXP pg_tuple_get_r_frame(int ntuples, HeapTuple *tuples, TupleDesc tupdesc);
-extern Datum r_get_pg(SEXP rval, plr_function *function, FunctionCallInfo fcinfo);
+extern Datum r_get_pg(SEXP rval, plr_function *function, FunctionCallInfo fcinfo, Datum **pValues);
 extern Datum get_datum(SEXP rval, Oid typid, Oid typelem, FmgrInfo in_func, bool *isnull);
 extern Datum get_scalar_datum(SEXP rval, Oid result_typ, FmgrInfo result_in_func, bool *isnull);
 

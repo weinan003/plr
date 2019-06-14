@@ -40,7 +40,7 @@ static SEXP get_r_vector(Oid typtype, int numels);
 static Datum get_trigger_tuple(SEXP rval, plr_function *function,
 									FunctionCallInfo fcinfo, bool *isnull);
 static Datum get_tuplestore(SEXP rval, plr_function *function,
-									FunctionCallInfo fcinfo, bool *isnull);
+									FunctionCallInfo fcinfo, bool *isnull, Datum **values);
 static Datum get_simple_array_datum(SEXP rval, Oid typelem, bool *isnull);
 static Datum get_array_datum(SEXP rval, plr_function *function, int col, bool *isnull);
 static Datum get_frame_array_datum(SEXP rval, plr_function *function, int col,
@@ -53,7 +53,8 @@ static Tuplestorestate *get_frame_tuplestore(SEXP rval,
 											 plr_function *function,
 											 AttInMetadata *attinmeta,
 											 MemoryContext per_query_ctx,
-											 bool retset);
+											 bool retset,
+											 Datum **Values);
 static Tuplestorestate *get_matrix_tuplestore(SEXP rval,
 											 plr_function *function,
 											 AttInMetadata *attinmeta,
@@ -676,7 +677,7 @@ pg_get_one_r(char *value, Oid typtype, SEXP *obj, int elnum)
  * given an R value, convert to its pg representation
  */
 Datum
-r_get_pg(SEXP rval, plr_function *function, FunctionCallInfo fcinfo)
+r_get_pg(SEXP rval, plr_function *function, FunctionCallInfo fcinfo, Datum **pValues)
 {
 	bool	isnull = false;
 	Datum	result;
@@ -692,10 +693,11 @@ r_get_pg(SEXP rval, plr_function *function, FunctionCallInfo fcinfo)
 				 errdetail("R return value type cannot be mapped to PostgreSQL return type."),
 				 errhint("Try BYTEA as the PostgreSQL return type.")));
 
+
 	if (CALLED_AS_TRIGGER(fcinfo))
 		result = get_trigger_tuple(rval, function, fcinfo, &isnull);
 	else if (function->result_istuple || fcinfo->flinfo->fn_retset)
-		result = get_tuplestore(rval, function, fcinfo, &isnull);
+		result = get_tuplestore(rval, function, fcinfo, &isnull, pValues);
 	else
 	{
 		/* short circuit if return value is Null */
@@ -924,7 +926,7 @@ get_trigger_tuple(SEXP rval, plr_function *function, FunctionCallInfo fcinfo, bo
 }
 
 static Datum
-get_tuplestore(SEXP rval, plr_function *function, FunctionCallInfo fcinfo, bool *isnull)
+get_tuplestore(SEXP rval, plr_function *function, FunctionCallInfo fcinfo, bool *isnull,Datum** pValues)
 {
 	bool			retset = fcinfo->flinfo->fn_retset;
 	ReturnSetInfo  *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
@@ -976,9 +978,9 @@ get_tuplestore(SEXP rval, plr_function *function, FunctionCallInfo fcinfo, bool 
 	rsinfo->returnMode = SFRM_Materialize;
 
 	if (isFrame(rval))
-		rsinfo->setResult = get_frame_tuplestore(rval, function, attinmeta, per_query_ctx, retset);
+		rsinfo->setResult = get_frame_tuplestore(rval, function, attinmeta, per_query_ctx, retset, pValues);
 	else if (isList(rval) || isNewList(rval))
-		rsinfo->setResult = get_frame_tuplestore(rval, function, attinmeta, per_query_ctx, retset);
+		rsinfo->setResult = get_frame_tuplestore(rval, function, attinmeta, per_query_ctx, retset, NULL);
 	else if (isMatrix(rval))
 		rsinfo->setResult = get_matrix_tuplestore(rval, function, attinmeta, per_query_ctx, retset);
 	else
@@ -1871,7 +1873,8 @@ get_frame_tuplestore(SEXP rval,
 					 plr_function *function,
 					 AttInMetadata *attinmeta,
 					 MemoryContext per_query_ctx,
-					 bool retset)
+					 bool retset,
+					 Datum **pValues)
 {
 	Tuplestorestate	   *tupstore;
 	char			  **values;
@@ -1886,15 +1889,19 @@ get_frame_tuplestore(SEXP rval,
 	SEXP				dfcol;
 	SEXP				result;
 
+
 	if (nc != tupdesc_nc)
 		ereport(ERROR,
 		(errcode(ERRCODE_DATA_EXCEPTION),
 			errmsg("actual and requested return type mismatch"),
 			errdetail("Actual return type has %d columns, but " \
 					  "requested return type has %d", nc, tupdesc_nc)));
-		
+
 	/* switch to appropriate context to create the tuple store */
 	oldcontext = MemoryContextSwitchTo(per_query_ctx);
+
+	bool	   *nulls;
+	nulls = (bool *) palloc(tupdesc->natts * sizeof(bool));
 
 	/* initialize our tuplestore */
 	tupstore = TUPLESTORE_BEGIN_HEAP;
@@ -2061,7 +2068,44 @@ get_frame_tuplestore(SEXP rval,
 			UNPROTECT(1);
 		}
 
+		{
+			TupleDesc	tupdesc = attinmeta->tupdesc;
+			int			natts = tupdesc->natts;
+			Datum	   *dvalues;
+
+			dvalues = (Datum *) malloc(natts * sizeof(Datum));
+
+			/* Call the "in" function for each non-dropped attribute */
+			for (int k = 0; k < natts; k++)
+			{
+				if (!tupdesc->attrs[k]->attisdropped)
+				{
+					/* Non-dropped attributes */
+					dvalues[k] = InputFunctionCall(&attinmeta->attinfuncs[k],
+					                               values[k],
+					                               attinmeta->attioparams[k],
+					                               attinmeta->atttypmods[k]);
+					if (values[k] != NULL)
+						nulls[k] = false;
+					else
+						nulls[k] = true;
+				}
+				else
+				{
+					/* Handle dropped attributes by setting to NULL */
+					dvalues[k] = (Datum) 0;
+					nulls[k] = true;
+				}
+			}
+
+			pValues[i] = dvalues;
+
+		}
+
+		pValues[nr] = NULL;
+
 		/* construct the tuple */
+
 		tuple = BuildTupleFromCStrings(attinmeta, values);
 
 		/* switch to appropriate context while storing the tuple */
@@ -2077,6 +2121,8 @@ get_frame_tuplestore(SEXP rval,
 			if (values[j] != NULL)
 				pfree(values[j]);
 	}
+
+	pfree(nulls);
 	UNPROTECT(1);
 
 	oldcontext = MemoryContextSwitchTo(per_query_ctx);

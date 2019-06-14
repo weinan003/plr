@@ -739,12 +739,108 @@ plr_trigger_handler(PG_FUNCTION_ARGS)
 	 */
 	if (SPI_finish() != SPI_OK_FINISH)
 		elog(ERROR, "SPI_finish failed");
-	retval = r_get_pg(rvalue, function, fcinfo);
+	retval = r_get_pg(rvalue, function, fcinfo, NULL);
 
 	POP_PLERRCONTEXT;
 	UNPROTECT(3);
 
 	return retval;
+}
+
+typedef struct ResultCache{
+	char proname[100];
+	int nargs;
+	Datum args[100];
+	Datum **result;
+}ResultCache;
+
+ResultCache resultCacheArray[1024] = {};
+
+
+static bool
+hascacheresult(plr_function * function, PG_FUNCTION_ARGS, int* resultid)
+{
+	int i = 0;
+	while( resultCacheArray[i].proname[0] != '\0')
+	{
+		if((resultCacheArray[i].nargs == function->nargs)
+			&&!strcmp(resultCacheArray[i].proname, function->proname))
+		{
+			for(int j = 0; j < function->nargs; j++)
+				if(resultCacheArray[i].args[j] != fcinfo->arg[j])
+					goto next;
+
+			*resultid = i;
+
+			return true;
+		}
+		next:
+		i++;
+	}
+
+
+	return false;
+}
+
+static Datum
+grabcacheresult(plr_function * function, PG_FUNCTION_ARGS, int resultid)
+{
+	TupleDesc tupdesc;
+	HeapTuple tuple;
+	MemoryContext oldcontext;
+	Tuplestorestate	   *tupstore;
+	ReturnSetInfo * rsinfo = (ReturnSetInfo *)fcinfo->resultinfo;
+	tupdesc = CreateTupleDescCopy(rsinfo->expectedDesc);
+	bool *nulls = palloc0(tupdesc->natts * sizeof(bool));
+
+	ResultCache *resultCache = &resultCacheArray[resultid];
+
+	oldcontext = MemoryContextSwitchTo(rsinfo->econtext->ecxt_per_query_memory);
+
+	tupstore = TUPLESTORE_BEGIN_HEAP;
+
+	MemoryContextSwitchTo(oldcontext);
+
+	for(int i = 0; resultCache->result[i] != NULL ; i++)
+	{
+		Datum * dvalues = resultCache->result[i];
+
+		tuple = heap_form_tuple(tupdesc, dvalues, nulls);
+
+		oldcontext = MemoryContextSwitchTo(rsinfo->econtext->ecxt_per_query_memory);
+
+		/* now store it */
+		tuplestore_puttuple(tupstore, tuple);
+
+		/* now reset the context */
+		MemoryContextSwitchTo(oldcontext);
+
+	}
+	pfree(nulls);
+
+	rsinfo->setDesc = tupdesc;
+	rsinfo->setResult = tupstore;
+	rsinfo->returnMode = SFRM_Materialize;
+
+	return 0;
+}
+
+static void
+storecacheresult(plr_function * function, PG_FUNCTION_ARGS, Datum **pValues)
+{
+	int i = 0;
+	while( resultCacheArray[i].proname[0] != '\0')
+		i++;
+	ResultCache *resultCache = &resultCacheArray[i];
+
+	resultCache->nargs = function->nargs;
+
+	strcpy(resultCache->proname, function->proname);
+
+	for(int j = 0; j < function->nargs; j++)
+		resultCache->args[j] = fcinfo->arg[j];
+
+	resultCache->result = pValues;
 }
 
 static Datum
@@ -760,8 +856,19 @@ plr_func_handler(PG_FUNCTION_ARGS)
 	/* Find or compile the function */
 	function = compile_plr_function(fcinfo);
 
-	/* set up error context */
+	int resultid;
 	PUSH_PLERRCONTEXT(plr_error_callback, function->proname);
+	if(hascacheresult(function, fcinfo, &resultid))
+	{
+		retval = grabcacheresult(function, fcinfo, resultid);
+
+		if (SPI_finish() != SPI_OK_FINISH)
+			elog(ERROR, "SPI_finish failed");
+		POP_PLERRCONTEXT;
+		return retval;
+	}
+
+	/* set up error context */
 
 	PROTECT(fun = function->fun);
 
@@ -771,16 +878,25 @@ plr_func_handler(PG_FUNCTION_ARGS)
 	/* Call the R function */
 	PROTECT(rvalue = call_r_func(fun, rargs));
 
+	Datum **pValues;
+	pValues = malloc(10000 * sizeof(Datum *));
+	memset(pValues, 0, 10000 * sizeof(Datum));
 	/*
 	 * Convert the return value from an R object to a Datum.
 	 * We expect r_get_pg to do the right thing with missing or empty results.
 	 */
 	if (SPI_finish() != SPI_OK_FINISH)
 		elog(ERROR, "SPI_finish failed");
-	retval = r_get_pg(rvalue, function, fcinfo);
+	retval = r_get_pg(rvalue, function, fcinfo,pValues);
+
 
 	POP_PLERRCONTEXT;
 	UNPROTECT(3);
+
+	if(*pValues)
+		storecacheresult(function, fcinfo, pValues);
+	else
+		free(*pValues);
 
 	return retval;
 }
